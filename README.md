@@ -1,6 +1,6 @@
 # AWS Kill Switch
 
-AWS Kill Switch is a Lambda function (and proof of concept client) that an organization can implement in a dedicated "Security" account to give their security engineers the ability to delete IAM roles or apply a highly restrictive service control policie (SCP) on any account in their organization. 
+AWS Kill Switch is a Lambda function (and proof of concept client) that an organization can implement in a dedicated "Security" account to give their security engineers the ability to delete IAM roles or apply a highly restrictive service control policy (SCP) on any account in their organization. 
 
 ## Prerequisites
 
@@ -18,8 +18,7 @@ git clone https://github.com/secengjeff/awskillswitch.git
 
 ### Installing
 
-[!WARNING]
-Before building the awskillswitch Lambda function review `awskillswitch.go` and consider modifying `scpPolicy` to meet your organization's unique requirements. By default the `apply_scp` action will restrict all IAM actions on the account with the exception of `cloudwatch:*`, `cloudtrail:*`, and `guardduty:*`. This may break your application.
+:warning: Before building the awskillswitch Lambda function review `awskillswitch.go` and consider modifying `scpPolicy` to meet your organization's unique requirements. By default the `apply_scp` action will restrict all IAM actions on the account with the exception of `cloudwatch:*`, `cloudtrail:*`, and `guardduty:*`. This may break your application.
 
 Follow these steps to build the awskillswitch Lambda function and zip the binary: 
 
@@ -92,8 +91,7 @@ go build -o killswitchclient killswitchclient.go
 
 ### Usage
 
-[!WARNING]
-The `apply_scp` and `delete_role` actions are one-way operations. Do not test/experiment in production. Any SCPs applied or IAM roles deleted will remain in this state until manual action is taken to remove the SCP or recreate the deleted role. Ensure that you have the the ability to reverse these changes and incorporate the appropriate steps in your incident response playbooks. 
+:warning: The `apply_scp` and `delete_role` actions are one-way operations. Do not test/experiment in production. Any SCPs applied or IAM roles deleted will remain in this state until manual action is taken to remove the SCP or recreate the deleted role. Ensure that you have the the ability to reverse these changes and incorporate the appropriate steps in your incident response playbooks. 
 
 ### Environment
 
@@ -141,7 +139,7 @@ This call will detach IAM policies and delete inline IAM policies before deletin
 * The role that you assume when using the `apply_scp` action must be in the organization management account and have a policy that allows `organizations:CreatePolicy` and `organizations:AttachPolicy`.
 * The role that you assume when using the `delete_role` action must be in targeted account and have a policy that allows `iam:DeleteRole`, `iam:ListAttachedRolePolicies`, `iam:DetachRolePolicy`, `iam:ListRolePolicies`, and `iam:DeleteRolePolicy`.
 
-Consider using [AWS CloudFormation StackSets](https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/what-is-cfnstacksets.html) to deploy a role for the purpose of `delete_role` to every account in your organization.
+Consider using [AWS CloudFormation StackSets](https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/what-is-cfnstacksets.html) to deploy a `delete_role` role to every account in your organization.
 
 ### Example
 
