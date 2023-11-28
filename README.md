@@ -6,7 +6,52 @@ AWS Kill Switch is a Lambda function (and proof of concept client) that an organ
 
 - [Go](https://golang.org/dl/)
 
-Tested on go1.21.3 on arm64.  
+Tested on go1.21.3 on arm64. 
+
+## Preparation
+
+This tool requires you to have roles that you can assume from a dedicated "Security" account to your organization management account (`apply_scp`) or to any account in your organization (`detach_policies` or `delete_role`). You can use [AWS CloudFormation StackSets](https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/what-is-cfnstacksets.html) to automate the creation of these roles.
+
+### Required permissions
+
+For each action:
+
+* `apply_scp`: Role must be in the organization management account and have a policy that allows `organizations:CreatePolicy` and `organizations:AttachPolicy`.
+* `detach_policies`: Role must be in the targeted account and have a policy that allows `iam:ListAttachedRolePolicies`, `iam:DetachRolePolicy`, `iam:ListRolePolicies`, and `iam:DeleteRolePolicy`.
+* `delete_role`: Role must be in targeted account and have a policy that allows `iam:DeleteRole`, `iam:ListAttachedRolePolicies`, `iam:DetachRolePolicy`, `iam:ListRolePolicies`, and `iam:DeleteRolePolicy`.
+
+### Prevent tampering
+
+You should take steps to ensure that a threat actor cannot make modifications to the IAM role that you plan to assume during a security incident. Consider implementing a SCP like:
+
+```
+{    
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "DenyAccessToASpecificRole",
+      "Effect": "Deny",
+      "Action": [
+        "iam:AttachRolePolicy",
+        "iam:DeleteRole",
+        "iam:DeleteRolePermissionsBoundary",
+        "iam:DeleteRolePolicy",
+        "iam:DetachRolePolicy",
+        "iam:PutRolePermissionsBoundary",
+        "iam:PutRolePolicy",
+        "iam:UpdateAssumeRolePolicy",
+        "iam:UpdateRole",
+        "iam:UpdateRoleDescription"
+      ],
+      "Resource": [
+        "arn:aws:iam::*:role/security-role"
+      ]
+    }
+  ]
+}
+```
+
+This example assumes that you created a service managed StackSet in your organization that automatically creates `security-role` in every account. With this SCP the threat actor will be unable to tamper with your role or attached policies, even if they have elevated permissions that would otherwise allow manipulation of roles and policies.
 
 ## Installation
 
@@ -18,7 +63,7 @@ git clone https://github.com/secengjeff/awskillswitch.git
 
 ### Installing
 
-:warning: Before building the awskillswitch Lambda function review `awskillswitch.go` and consider modifying `scpPolicy` to meet your organization's unique requirements. By default the `apply_scp` action will restrict all IAM actions on the account with the exception of `cloudwatch:*`, `cloudtrail:*`, and `guardduty:*`. This may break your application.
+:warning: Before building the awskillswitch Lambda function review `awskillswitch.go` and consider modifying `switch.conf` to meet your organization's unique requirements. By default the `apply_scp` action will restrict all IAM actions on the account with the exception of `cloudwatch:*`, `cloudtrail:*`, and `guardduty:*`. This may break your application.
 
 Follow these steps to build the awskillswitch Lambda function and zip the binary: 
 
@@ -27,7 +72,7 @@ cd awskillswitch
 
 GOOS="linux" GOARCH="amd64" go build -o main awskillswitch.go
 
-zip main.zip main
+zip main.zip main switch.conf
 ```
 
 Create an execution role (`execution_role.json`):
@@ -91,7 +136,7 @@ go build -o killswitchclient killswitchclient.go
 
 ### Usage
 
-:warning: The `apply_scp` and `delete_role` actions are one-way operations. Do not test/experiment in production. Any SCPs applied or IAM roles deleted will remain in this state until manual action is taken to remove the SCP or recreate the deleted role. Ensure that you have the the ability to reverse these changes and incorporate the appropriate steps in your incident response playbooks. 
+:warning: The actions you take with this tool are one-way operations. Do not test/experiment in production. Any SCPs applied or IAM roles deleted will remain in this state until manual action is taken to remove the SCP or recreate deleted role and/or policies. Ensure that you have the the ability to reverse these changes and incorporate the appropriate steps in your incident response playbooks. 
 
 ### Environment
 
@@ -99,11 +144,11 @@ You can run this client locally by manually setting AWS CLI environment variable
 
 ### Flags
 
-- `action`: Specifies the action to perform. Valid values are `apply_scp` or `delete_role`.
+- `action`: Specifies the action to perform. Valid values are `apply_scp`, `detach_policies`, or `delete_role`.
 - `lambda`: The name or ARN of the AWS Lambda function to invoke.
 - `target_account`: The AWS Account ID where the action will take place.
 - `role_to_assume`: The IAM role that will be assumed by the Lambda function to perform the action.
-- `target_role`: The name of the IAM role to delete (required only for the `delete_role` action).
+- `target_role`: The name of the IAM role to delete (required only for the `detach_policies` and `delete_role` actions).
 - `org_management_account`: The AWS Organization's management account ID (required only for the `apply_scp` action).
 - `region`: The AWS region where the Lambda function is deployed (defaults to us-east-1 if none provided)
 
@@ -121,9 +166,23 @@ If you prefer to call the Lambda function directly your application will need to
 
 ```
 
+This object will apply a highly restrictive SCP to the AWS account `123456789012` by assuming `RoleToAssume` in AWS account `998877665544`.
+
 **To delete an IAM role:**
 
 This call will detach IAM policies and delete inline IAM policies before deleting the IAM role.
+
+```
+{
+  "action": "detach_policies",
+  "target_account_id": "210987654321",
+  "role_to_assume": "RoleToAssume",
+  "target_role_name": "RoleToDetach"
+}
+
+```
+
+This object will detach IAM policies and delete inline policies from `RoleToDetach` in AWS account `210987654321` by assuming `RoleToAssume` in the same account.
 
 ```
 {
@@ -134,12 +193,8 @@ This call will detach IAM policies and delete inline IAM policies before deletin
 }
 
 ```
-### Policies
 
-* The role that you assume when using the `apply_scp` action must be in the organization management account and have a policy that allows `organizations:CreatePolicy` and `organizations:AttachPolicy`.
-* The role that you assume when using the `delete_role` action must be in targeted account and have a policy that allows `iam:DeleteRole`, `iam:ListAttachedRolePolicies`, `iam:DetachRolePolicy`, `iam:ListRolePolicies`, and `iam:DeleteRolePolicy`.
-
-Consider using [AWS CloudFormation StackSets](https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/what-is-cfnstacksets.html) to deploy a `delete_role` role to every account in your organization.
+This object will delete the IAM role `RoleToDelete` in AWS account `210987654321` by assuming `RoleToAssume` in the same account.
 
 ### Example
 
@@ -154,6 +209,12 @@ This command will apply a highly restrictive SCP to the AWS account `12345678901
 **Deleting an IAM role:**
 
 This command will detach IAM policies and delete inline IAM policies before deleting the IAM role.
+
+```
+./awskillswitch -action detach_policies -lambda "LambdaArn" -target_account "210987654321" -role_to_assume "RoleToAssume" -target_role "RoleToDelete" -region "us-east-1"
+```
+
+This object will detach IAM policies and delete inline policies from `RoleToDetach` in AWS account `210987654321` by assuming `RoleToAssume` in the same account using the `LambdaArn` Lambda function deployed to `us-east-1`.
 
 ```
 ./awskillswitch -action delete_role -lambda "LambdaArn" -target_account "210987654321" -role_to_assume "RoleToAssume" -target_role "RoleToDelete" -region "us-east-1"

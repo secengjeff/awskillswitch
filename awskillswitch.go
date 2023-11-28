@@ -2,8 +2,10 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 
 	"github.com/aws/aws-lambda-go/lambda"
 	"github.com/aws/aws-sdk-go/aws"
@@ -16,8 +18,9 @@ import (
 type Action string
 
 const (
-	ApplySCP   Action = "apply_scp"
-	DeleteRole Action = "delete_role"
+	ApplySCP       Action = "apply_scp"
+	DeleteRole     Action = "delete_role"
+	DetachPolicies Action = "detach_policies"
 	// Default region to be used if the region is not specified by the user
 	DefaultRegion = "us-east-1"
 )
@@ -26,9 +29,16 @@ type Request struct {
 	Action                 Action `json:"action"`
 	TargetAccountID        string `json:"target_account_id"`
 	RoleToAssume           string `json:"role_to_assume"`
-	TargetRoleName         string `json:"target_role_name,omitempty"`       // Used for delete_role action
+	TargetRoleName         string `json:"target_role_name,omitempty"`       // Used for delete_role & detach_policies actions
 	OrgManagementAccountID string `json:"org_management_account,omitempty"` // Used for apply_scp action
 	Region                 string `json:"region,omitempty"`
+}
+
+type Config struct {
+	SwitchConfigVersion string `json:"switchConfigVersion"`
+	SwitchPolicies      struct {
+		SCPolicy json.RawMessage `json:"scpPolicy"`
+	} `json:"switchPolicies"`
 }
 
 func HandleRequest(ctx context.Context, request Request) (string, error) {
@@ -50,36 +60,43 @@ func HandleRequest(ctx context.Context, request Request) (string, error) {
 		if request.OrgManagementAccountID == "" {
 			return "", errors.New("managementAccount is required for apply_scp action")
 		}
-		return applySCP(ctx, sess, request.OrgManagementAccountID, request.TargetAccountID, request.RoleToAssume)
-	case DeleteRole:
-		if request.TargetRoleName == "" {
-			return "", errors.New("targetRoleName is required for delete_role action")
+		// Load SCP from .conf file
+		configFile := "switch.conf"
+		config, err := loadConfig(configFile)
+		if err != nil {
+			return "", fmt.Errorf("error loading config file: %v", err)
 		}
-		return deleteRole(ctx, sess, request.TargetAccountID, request.RoleToAssume, request.TargetRoleName)
+		return applySCP(ctx, sess, request.OrgManagementAccountID, request.TargetAccountID, request.RoleToAssume, config)
+	case DetachPolicies, DeleteRole:
+		if request.TargetRoleName == "" {
+			return "", errors.New("targetRoleName is required for delete_role and detach_policies actions")
+		}
+		return manageRole(ctx, sess, request.Action, request.TargetAccountID, request.RoleToAssume, request.TargetRoleName)
 	default:
 		return "", errors.New("invalid action")
 	}
 }
 
-func applySCP(ctx context.Context, sess *session.Session, managementAccount, targetAccountID, roleToAssume string) (string, error) {
+// Load awskillswitch.conf if needed
+func loadConfig(filename string) (*Config, error) {
+	var config Config
+	configFile, err := os.ReadFile(filename)
+	if err != nil {
+		return nil, err
+	}
+	err = json.Unmarshal(configFile, &config)
+	if err != nil {
+		return nil, err
+	}
+	return &config, nil
+}
+
+func applySCP(ctx context.Context, sess *session.Session, managementAccount, targetAccountID, roleToAssume string, config *Config) (string, error) {
 	creds := stscreds.NewCredentials(sess, fmt.Sprintf("arn:aws:iam::%s:role/%s", managementAccount, roleToAssume))
 	svc := organizations.New(sess, &aws.Config{Credentials: creds})
 
-	// Define the SCP policy
-	scpPolicy := `{
-		"Version": "2012-10-17",
-		"Statement": [
-			{
-				"Effect": "Deny",
-				"NotAction": [
-					"cloudwatch:*",
-					"cloudtrail:*",
-					"guardduty:*"
-				],
-				"Resource": "*"
-			}
-		]
-	}`
+	// Convert byte slice to string
+	scpPolicy := string(config.SwitchPolicies.SCPolicy)
 
 	// Create the SCP
 	createPolicyInput := &organizations.CreatePolicyInput{
@@ -108,7 +125,8 @@ func applySCP(ctx context.Context, sess *session.Session, managementAccount, tar
 	return fmt.Sprintf("SCP applied to account %s with policy ID %s", targetAccountID, *policyResp.Policy.PolicySummary.Id), nil
 }
 
-func deleteRole(ctx context.Context, sess *session.Session, targetAccountID, roleToAssume, targetRoleName string) (string, error) {
+// Actions involving role manipulation or deletion
+func manageRole(ctx context.Context, sess *session.Session, action Action, targetAccountID, roleToAssume, targetRoleName string) (string, error) {
 	creds := stscreds.NewCredentials(sess, fmt.Sprintf("arn:aws:iam::%s:role/%s", targetAccountID, roleToAssume))
 	svc := iam.New(sess, &aws.Config{Credentials: creds})
 
@@ -146,13 +164,15 @@ func deleteRole(ctx context.Context, sess *session.Session, targetAccountID, rol
 		}
 	}
 
-	// Delete the role
-	_, err = svc.DeleteRole(&iam.DeleteRoleInput{RoleName: aws.String(targetRoleName)})
-	if err != nil {
-		return "", fmt.Errorf("error deleting role %s in account %s: %v", targetRoleName, targetAccountID, err)
+	// Delete the role if Action is delete_role
+	if action == DeleteRole {
+		_, err = svc.DeleteRole(&iam.DeleteRoleInput{RoleName: aws.String(targetRoleName)})
+		if err != nil {
+			return "", fmt.Errorf("error deleting role %s in account %s: %v", targetRoleName, targetAccountID, err)
+		}
+		return fmt.Sprintf("Role %s and its policies are detached and deleted in account %s", targetRoleName, targetAccountID), nil
 	}
-
-	return fmt.Sprintf("Role %s and its policies are detached and deleted in account %s", targetRoleName, targetAccountID), nil
+	return fmt.Sprintf("Policies detached from role %s in account %s", targetRoleName, targetAccountID), nil
 }
 
 func main() {
