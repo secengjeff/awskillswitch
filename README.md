@@ -14,11 +14,11 @@ This tool requires you to have roles that you can assume from a dedicated "Secur
 
 ### Required permissions
 
-For each action:
-
-* `apply_scp`: Role must be in the organization management account and have a policy that allows `organizations:CreatePolicy` and `organizations:AttachPolicy`.
-* `detach_policies`: Role must be in the targeted account and have a policy that allows `iam:ListAttachedRolePolicies`, `iam:DetachRolePolicy`, `iam:ListRolePolicies`, and `iam:DeleteRolePolicy`.
-* `delete_role`: Role must be in targeted account and have a policy that allows `iam:DeleteRole`, `iam:ListAttachedRolePolicies`, `iam:DetachRolePolicy`, `iam:ListRolePolicies`, and `iam:DeleteRolePolicy`.
+| Action | Required permissions | Other requirements
+| --- | --- | --- |
+| `apply_scp` | organizations:CreatePolicy, organizations:AttachPolicy | Role to assume must be in the organization management account
+| `detach_policies` | iam:ListAttachedRolePolicies, iam:DetachRolePolicy, iam:ListRolePolicies, iam:DeleteRolePolicy | Role to assume must be in the targeted account
+| `delete_role` | iam:DeleteRole, iam:ListAttachedRolePolicies, iam:DetachRolePolicy, iam:ListRolePolicies, iam:DeleteRolePolicy | Role to assume must be in the targeted account
 
 ### Prevent tampering
 
