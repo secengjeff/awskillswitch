@@ -1,6 +1,6 @@
 # AWS Kill Switch
 
-AWS Kill Switch is a Lambda function (and proof of concept client) that an organization can implement in a dedicated "Security" account to give their security engineers the ability to delete IAM roles or apply a highly restrictive service control policy (SCP) on any account in their organization. 
+AWS Kill Switch is a Lambda function (and proof of concept client) that an organization can implement in a dedicated "Security" account to give their security engineers the ability to delete IAM roles or apply a highly restrictive service control policy (SCP) on any account in their organization.
 
 ## Prerequisites
 
@@ -166,11 +166,9 @@ If you prefer to call the Lambda function directly your application will need to
 
 ```
 
-This object will apply a highly restrictive SCP to the AWS account `123456789012` by assuming `RoleToAssume` in AWS account `998877665544`.
+This call will apply the SCP defined by `scpPolicy` in `switch.conf` to the AWS account `123456789012` by assuming `RoleToAssume` in AWS account `998877665544`.
 
-**To delete an IAM role:**
-
-This call will detach IAM policies and delete inline IAM policies before deleting the IAM role.
+**To detach policies from an IAM role:**
 
 ```
 {
@@ -182,7 +180,9 @@ This call will detach IAM policies and delete inline IAM policies before deletin
 
 ```
 
-This object will detach IAM policies and delete inline policies from `RoleToDetach` in AWS account `210987654321` by assuming `RoleToAssume` in the same account.
+This call will detach IAM policies and delete inline IAM policies from `RoleToDetach` in AWS account `210987654321` by assuming `RoleToAssume` in the same account.
+
+**To delete an IAM role:**
 
 ```
 {
@@ -194,7 +194,7 @@ This object will detach IAM policies and delete inline policies from `RoleToDeta
 
 ```
 
-This object will delete the IAM role `RoleToDelete` in AWS account `210987654321` by assuming `RoleToAssume` in the same account.
+This call will delete the IAM role `RoleToDelete` in AWS account `210987654321` by assuming `RoleToAssume` in the same account.
 
 ### Example
 
@@ -204,17 +204,17 @@ This object will delete the IAM role `RoleToDelete` in AWS account `210987654321
 ./awskillswitch -action apply_scp -lambda "LambdaArn" -target_account "123456789012" -role_to_assume "RoleToAssume" -org_management_account "998877665544" -region "us-east-1"
 ```
 
-This command will apply a highly restrictive SCP to the AWS account `123456789012` by assuming `RoleToAssume` in AWS account `998877665544` using the `LambdaArn` function deployed to `us-east-1`.
+This command will apply the SCP defined by `scpPolicy` in `switch.conf` to the AWS account `123456789012` by assuming `RoleToAssume` in AWS account `998877665544` using the `LambdaArn` function deployed to `us-east-1`.
 
-**Deleting an IAM role:**
-
-This command will detach IAM policies and delete inline IAM policies before deleting the IAM role.
+**Detaching policies from an IAM role:**
 
 ```
 ./awskillswitch -action detach_policies -lambda "LambdaArn" -target_account "210987654321" -role_to_assume "RoleToAssume" -target_role "RoleToDelete" -region "us-east-1"
 ```
 
-This object will detach IAM policies and delete inline policies from `RoleToDetach` in AWS account `210987654321` by assuming `RoleToAssume` in the same account using the `LambdaArn` Lambda function deployed to `us-east-1`.
+This command will detach IAM policies and delete inline policies from `RoleToDetach` in AWS account `210987654321` by assuming `RoleToAssume` in the same account using the `LambdaArn` Lambda function deployed to `us-east-1`.
+
+**Deleting an IAM role:**
 
 ```
 ./awskillswitch -action delete_role -lambda "LambdaArn" -target_account "210987654321" -role_to_assume "RoleToAssume" -target_role "RoleToDelete" -region "us-east-1"
