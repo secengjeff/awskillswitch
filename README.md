@@ -1,7 +1,12 @@
 # AWS Kill Switch
 
-AWS Kill Switch is a Lambda function (and proof of concept client) that an organization can implement in a dedicated "Security" account to give their security engineers the ability to delete IAM roles or apply a highly restrictive service control policy (SCP) on any account in their organization.
+AWS Kill Switch is a Lambda function (and proof of concept client) that an organization can implement in a dedicated "Security" account to give their security engineers the ability to quickly deploy restrictions during a security incident, including:
 
+* Apply a service control policy (SCP) to freeze the state of a targeted account
+* Detach all policies and delete inline policies from a targeted IAM role
+* Revoke all sessions on a targeted IAM role or `ALL` customer managed IAM roles in a targeted account
+* Delete a targeted IAM role (which also revokes all sessions)
+ 
 ## Prerequisites
 
 - [Go](https://golang.org/dl/)
@@ -10,7 +15,7 @@ Tested on go1.21.3 on arm64.
 
 ## Preparation
 
-This tool requires you to have roles that you can assume from a dedicated "Security" account to your organization management account (`apply_scp`) or to any account in your organization (`detach_policies` or `delete_role`). You can use [AWS CloudFormation StackSets](https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/what-is-cfnstacksets.html) to automate the creation of these roles.
+This tool requires you to have roles that you can assume from a dedicated "Security" account to your organization management account (`apply_scp`) or to any account in your organization (actions other than `apply_scp`). You can use [AWS CloudFormation StackSets](https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/what-is-cfnstacksets.html) to automate the creation of these roles.
 
 ### Required permissions
 
@@ -18,6 +23,7 @@ This tool requires you to have roles that you can assume from a dedicated "Secur
 | --- | --- | --- |
 | `apply_scp` | organizations:CreatePolicy, organizations:AttachPolicy | Role to assume must be in the organization management account
 | `detach_policies` | iam:ListAttachedRolePolicies, iam:DetachRolePolicy, iam:ListRolePolicies, iam:DeleteRolePolicy | Role to assume must be in the targeted account
+| `revoke_sessions` | iam:AttachRolePolicy, iam:CreatePolicy, iam:ListRoles | Role to assume must be in the targeted account
 | `delete_role` | iam:DeleteRole, iam:ListAttachedRolePolicies, iam:DetachRolePolicy, iam:ListRolePolicies, iam:DeleteRolePolicy | Role to assume must be in the targeted account
 
 ### Prevent tampering
@@ -63,7 +69,7 @@ git clone https://github.com/secengjeff/awskillswitch.git
 
 ### Installing
 
-:warning: Before building the awskillswitch Lambda function review `awskillswitch.go` and consider modifying `switch.conf` to meet your organization's unique requirements. By default the `apply_scp` action will restrict all IAM actions on the account with the exception of `cloudwatch:*`, `cloudtrail:*`, and `guardduty:*`. This may break your application.
+:warning: Before creating the awskillswitch Lambda function review `awskillswitch.go` and consider modifying `switch.conf` to meet your organization's unique requirements. By default the `apply_scp` action will restrict most IAM actions on the account. This may break your application.
 
 Follow these steps to build the awskillswitch Lambda function and zip the binary: 
 
@@ -148,7 +154,7 @@ You can run this client locally by manually setting AWS CLI environment variable
 - `lambda`: The name or ARN of the AWS Lambda function to invoke.
 - `target_account`: The AWS Account ID where the action will take place.
 - `role_to_assume`: The IAM role that will be assumed by the Lambda function to perform the action.
-- `target_role`: The name of the IAM role to delete (required only for the `detach_policies` and `delete_role` actions).
+- `target_role`: The name of the IAM role to delete (required only for the `detach_policies` and `delete_role` actions). You may specify `ALL` when used with the `revoke_sessions` action to apply the action to all customer managed IAM roles in the targeted account.
 - `org_management_account`: The AWS Organization's management account ID (required only for the `apply_scp` action).
 - `region`: The AWS region where the Lambda function is deployed (defaults to us-east-1 if none provided)
 
@@ -180,7 +186,33 @@ This call will apply the SCP defined by `scpPolicy` in `switch.conf` to the AWS 
 
 ```
 
-This call will detach IAM policies and delete inline IAM policies from `RoleToDetach` in AWS account `210987654321` by assuming `RoleToAssume` in the same account.
+This call will detach IAM policies and delete inline IAM policies from `RoleToDetach` in AWS account `210987654321` by assuming `RoleToAssume` in the same account. Currently active session tokens **will remain valid** with all relevant permissions until expired.
+
+**To revoke sessions:**
+
+```
+{
+  "action": "revoke_sessions",
+  "target_account_id": "210987654321",
+  "role_to_assume": "RoleToAssume",
+  "target_role_name": "RoleToRevokeSessions"
+}
+
+```
+
+This call will apply a new policy that invalidates session tokens issued prior to the current time for `RoleToRevokeSessions` in AWS account `210987654321` by assuming `RoleToAssume` in the same account.
+
+```
+{
+  "action": "revoke_sessions",
+  "target_account_id": "210987654321",
+  "role_to_assume": "RoleToAssume",
+  "target_role_name": "ALL"
+}
+
+```
+
+This call will apply a new policy that invalidates session tokens issued prior to the current time for all customer managed IAM roles in AWS account `210987654321` by assuming `RoleToAssume` in the same account.
 
 **To delete an IAM role:**
 
@@ -194,7 +226,7 @@ This call will detach IAM policies and delete inline IAM policies from `RoleToDe
 
 ```
 
-This call will delete the IAM role `RoleToDelete` in AWS account `210987654321` by assuming `RoleToAssume` in the same account.
+This call will delete the IAM role `RoleToDelete` in AWS account `210987654321` by assuming `RoleToAssume` in the same account. Deleting a role will invalidate all session tokens for that role.
 
 ### Example
 
@@ -212,7 +244,7 @@ This command will apply the SCP defined by `scpPolicy` in `switch.conf` to the A
 ./awskillswitch -action detach_policies -lambda "LambdaArn" -target_account "210987654321" -role_to_assume "RoleToAssume" -target_role "RoleToDelete" -region "us-east-1"
 ```
 
-This command will detach IAM policies and delete inline policies from `RoleToDetach` in AWS account `210987654321` by assuming `RoleToAssume` in the same account using the `LambdaArn` Lambda function deployed to `us-east-1`.
+This command will detach IAM policies and delete inline policies from `RoleToDetach` in AWS account `210987654321` by assuming `RoleToAssume` in the same account using the `LambdaArn` Lambda function deployed to `us-east-1`. Currently active session tokens **will remain valid** with all relevant permissions until expired.
 
 **Deleting an IAM role:**
 
@@ -220,7 +252,21 @@ This command will detach IAM policies and delete inline policies from `RoleToDet
 ./awskillswitch -action delete_role -lambda "LambdaArn" -target_account "210987654321" -role_to_assume "RoleToAssume" -target_role "RoleToDelete" -region "us-east-1"
 ```
 
-This command will delete the IAM role `RoleToDelete` in AWS account `210987654321` by assuming `RoleToAssume` in the same account using the `LambdaArn` Lambda function deployed to `us-east-1`.
+This command will delete the IAM role `RoleToDelete` in AWS account `210987654321` by assuming `RoleToAssume` in the same account using the `LambdaArn` Lambda function deployed to `us-east-1`. Deleting a role will invalidate all session tokens for that role.
+
+**Revoking sessions:**
+
+```
+./awskillswitch -action revoke_sessions -lambda "LambdaArn" -target_account "210987654321" -role_to_assume "RoleToAssume" -target_role "RoleToRevokeSessions" -region "us-east-1"
+```
+
+This command will apply a new policy that invalidates session tokens issued prior to the current time for `RoleToRevokeSessions` in AWS account `210987654321` by assuming `RoleToAssume` in the same account using the `LambdaArn` Lambda function deployed to `us-east-1`. 
+
+```
+./awskillswitch -action revoke_sessions -lambda "LambdaArn" -target_account "210987654321" -role_to_assume "RoleToAssume" -target_role "ALL" -region "us-east-1"
+```
+
+This command will apply a new policy that invalidates session tokens issued prior to the current time for all customer managed IAM roles in AWS account `210987654321` by assuming `RoleToAssume` in the same account using the `LambdaArn` Lambda function deployed to `us-east-1`. 
 
 ## Built With
 

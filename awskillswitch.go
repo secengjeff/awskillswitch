@@ -6,6 +6,8 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strings"
+	"time"
 
 	"github.com/aws/aws-lambda-go/lambda"
 	"github.com/aws/aws-sdk-go/aws"
@@ -21,6 +23,7 @@ const (
 	ApplySCP       Action = "apply_scp"
 	DeleteRole     Action = "delete_role"
 	DetachPolicies Action = "detach_policies"
+	RevokeSessions Action = "revoke_sessions"
 	// Default region to be used if the region is not specified by the user
 	DefaultRegion = "us-east-1"
 )
@@ -29,7 +32,7 @@ type Request struct {
 	Action                 Action `json:"action"`
 	TargetAccountID        string `json:"target_account_id"`
 	RoleToAssume           string `json:"role_to_assume"`
-	TargetRoleName         string `json:"target_role_name,omitempty"`       // Used for delete_role & detach_policies actions
+	TargetRoleName         string `json:"target_role_name,omitempty"`       // Used for actions other than apply_scp
 	OrgManagementAccountID string `json:"org_management_account,omitempty"` // Used for apply_scp action
 	Region                 string `json:"region,omitempty"`
 }
@@ -69,9 +72,14 @@ func HandleRequest(ctx context.Context, request Request) (string, error) {
 		return applySCP(ctx, sess, request.OrgManagementAccountID, request.TargetAccountID, request.RoleToAssume, config)
 	case DetachPolicies, DeleteRole:
 		if request.TargetRoleName == "" {
-			return "", errors.New("targetRoleName is required for delete_role and detach_policies actions")
+			return "", errors.New("targetRoleName is required for this action")
 		}
 		return manageRole(ctx, sess, request.Action, request.TargetAccountID, request.RoleToAssume, request.TargetRoleName)
+	case RevokeSessions:
+		if request.TargetRoleName == "" {
+			return "", errors.New("targetRoleName is required for this action")
+		}
+		return revokeSession(ctx, sess, request.TargetAccountID, request.RoleToAssume, request.TargetRoleName)
 	default:
 		return "", errors.New("invalid action")
 	}
@@ -89,6 +97,83 @@ func loadConfig(filename string) (*Config, error) {
 		return nil, err
 	}
 	return &config, nil
+}
+
+func revokeSession(ctx context.Context, sess *session.Session, targetAccountID, roleToAssume, targetRoleName string) (string, error) {
+	// Assume role
+	creds := stscreds.NewCredentials(sess, fmt.Sprintf("arn:aws:iam::%s:role/%s", targetAccountID, roleToAssume))
+	svc := iam.New(sess, &aws.Config{Credentials: creds})
+
+	// Give the invalidation policy a unique name based on the current time
+	policyName := fmt.Sprintf("TokenInvalidationPolicy-%s", time.Now().Format("20060102-150405"))
+
+	// Create the invalidation policy
+	policyDocument := fmt.Sprintf(`{
+        "Version": "2012-10-17",
+        "Statement": [{
+            "Effect": "Deny",
+            "Action": "*",
+            "Resource": "*",
+            "Condition": {"DateLessThan": {"aws:TokenIssueTime": "%s"}}
+        }]
+    }`, time.Now().Format(time.RFC3339))
+
+	createPolicyOutput, err := svc.CreatePolicy(&iam.CreatePolicyInput{
+		PolicyName:     aws.String(policyName),
+		PolicyDocument: aws.String(policyDocument),
+		Description:    aws.String("Policy to invalidate all tokens at time of creation"),
+	})
+	if err != nil {
+		return "", fmt.Errorf("error creating new policy: %v", err)
+	}
+
+	if targetRoleName == "ALL" {
+		// Attach the policy to all roles
+		return revokeSessionAllRoles(ctx, svc, createPolicyOutput.Policy.Arn, roleToAssume)
+	} else {
+		// Attach the policy to a specific role
+		_, err = svc.AttachRolePolicy(&iam.AttachRolePolicyInput{
+			RoleName:  aws.String(targetRoleName),
+			PolicyArn: createPolicyOutput.Policy.Arn,
+		})
+		if err != nil {
+			return "", fmt.Errorf("error attaching new policy to role %s in account %s: %v", targetRoleName, targetAccountID, err)
+		}
+		return fmt.Sprintf("New token recovation policy attached to role %s in account %s", targetRoleName, targetAccountID), nil
+	}
+}
+
+func revokeSessionAllRoles(ctx context.Context, svc *iam.IAM, policyArn *string, assumedRoleName string) (string, error) {
+	// List all roles
+	input := &iam.ListRolesInput{}
+	var result strings.Builder
+
+	err := svc.ListRolesPages(input, func(page *iam.ListRolesOutput, lastPage bool) bool {
+		for _, role := range page.Roles {
+			// Skip the role assumed by the Lambda function
+			if *role.RoleName == assumedRoleName {
+				continue
+			}
+
+			// Attach the policy to each role
+			_, err := svc.AttachRolePolicy(&iam.AttachRolePolicyInput{
+				RoleName:  role.RoleName,
+				PolicyArn: policyArn,
+			})
+			if err != nil {
+				fmt.Printf("Error attaching policy to role %s: %v\n", *role.RoleName, err)
+				continue
+			}
+			result.WriteString(fmt.Sprintf("Policy attached to role %s\n", *role.RoleName))
+		}
+		return !lastPage
+	})
+
+	if err != nil {
+		return "", fmt.Errorf("error attaching policy to roles: %v", err)
+	}
+
+	return result.String(), nil
 }
 
 func applySCP(ctx context.Context, sess *session.Session, managementAccount, targetAccountID, roleToAssume string, config *Config) (string, error) {

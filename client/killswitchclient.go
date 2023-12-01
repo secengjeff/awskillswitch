@@ -17,6 +17,7 @@ const (
 	ApplySCP       ActionType = "apply_scp"
 	DeleteRole     ActionType = "delete_role"
 	DetachPolicies ActionType = "detach_policies"
+	RevokeSessions ActionType = "revoke_sessions"
 )
 
 // LambdaRequest defines the payload structure to send to the Lambda function
@@ -24,7 +25,7 @@ type LambdaRequest struct {
 	Action                 ActionType `json:"action"`
 	TargetAccountID        string     `json:"target_account_id"`
 	RoleToAssume           string     `json:"role_to_assume"`
-	TargetRoleName         string     `json:"target_role_name,omitempty"`       // Role name for delete_role & detach_policies
+	TargetRoleName         string     `json:"target_role_name,omitempty"`       // Role name for actions other than apply_scp
 	OrgManagementAccountID string     `json:"org_management_account,omitempty"` // Management account ID for apply_scp
 	Region                 string     `json:"region,omitempty"`
 }
@@ -61,13 +62,13 @@ func main() {
 		orgManagementAccountID string
 		regionFlag             string
 	)
-	flag.StringVar(&actionFlag, "action", "", "Action to perform: 'apply_scp', 'delete_role', or 'detach_policies'")
+	flag.StringVar(&actionFlag, "action", "", "Action to perform: 'apply_scp', 'delete_role', 'detach_policies', or 'revoke_sessions")
 	flag.StringVar(&lambdaFlag, "lambda", "", "Lambda function name or ARN")
 	flag.StringVar(&targetAccountFlag, "target_account", "", "AWS target account ID to perform the action on")
 	flag.StringVar(&roleToAssumeFlag, "role_to_assume", "", "Role to assume when performing the action")
-	flag.StringVar(&targetRoleFlag, "target_role", "", "IAM role name to delete or detach (for delete_role and detach_policies only)")
+	flag.StringVar(&targetRoleFlag, "target_role", "", "IAM role name to delete, detach, or revoke sessions on. Required for actions other than 'apply_scp (for delete_role, detach_policies, or revoke_sessions only). Specify ALL to revoke all sessions on all roles when using the revoke_sessions action.")
 	flag.StringVar(&orgManagementAccountID, "org_management_account", "", "AWS Org Management Account ID (for apply_scp only)")
-	flag.StringVar(&regionFlag, "region", "", "AWS region for the Lambda function")
+	flag.StringVar(&regionFlag, "region", "", "AWS region of the Lambda function")
 	flag.Parse()
 
 	// Validate flags
@@ -79,8 +80,8 @@ func main() {
 		fmt.Println("For 'apply_scp' action, 'org_management_account' flag is also required.")
 		os.Exit(1)
 	}
-	if (actionFlag == string(DeleteRole) || actionFlag == string(DetachPolicies)) && targetRoleFlag == "" {
-		fmt.Println("For 'delete_role' and 'detach_policies' actions, the 'target_role' flag is required.")
+	if (actionFlag == string(DeleteRole) || actionFlag == string(DetachPolicies)) || actionFlag == string(RevokeSessions) && targetRoleFlag == "" {
+		fmt.Println("The 'target_role' flag is required for actions other than 'apply_scp'.")
 		os.Exit(1)
 	}
 
@@ -109,5 +110,13 @@ func main() {
 	}
 
 	// Print the result of the Lambda invocation
-	fmt.Printf("Lambda invocation result: %s\n", string(result.Payload))
+	var resultString string
+	err = json.Unmarshal(result.Payload, &resultString)
+	if err != nil {
+		fmt.Printf("Error unmarshalling Lambda result: %s\n", err)
+		os.Exit(1)
+	}
+
+	fmt.Println("Lambda invocation result:")
+	fmt.Println(resultString)
 }
