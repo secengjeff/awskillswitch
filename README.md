@@ -142,7 +142,7 @@ go build -o killswitchclient killswitchclient.go
 
 ### Usage
 
-:warning: The actions you take with this tool are one-way operations. Do not test/experiment in production. Any SCPs applied or IAM roles deleted will remain in this state until manual action is taken to remove the SCP or recreate deleted role and/or policies. Ensure that you have the the ability to reverse these changes and incorporate the appropriate steps in your incident response playbooks. 
+:warning: The actions you take with this tool are one-way operations. Do not test/experiment in production. Any SCPs applied or IAM roles deleted will remain in this state until manual action is taken to remove the SCP or recreate deleted role and/or policies. Ensure that you have the the ability to reverse these changes and incorporate the appropriate steps in your incident response playbooks.
 
 ### Environment
 
@@ -150,11 +150,11 @@ You can run this client locally by manually setting AWS CLI environment variable
 
 ### Flags
 
-- `action`: Specifies the action to perform. Valid values are `apply_scp`, `detach_policies`, or `delete_role`.
+- `action`: Specifies the action to perform. Valid values are `apply_scp`, `detach_policies`, `revoke_sessions` or `delete_role`.
 - `lambda`: The name or ARN of the AWS Lambda function to invoke.
 - `target_account`: The AWS Account ID where the action will take place.
 - `role_to_assume`: The IAM role that will be assumed by the Lambda function to perform the action.
-- `target_role`: The name of the IAM role to delete (required only for the `detach_policies` and `delete_role` actions). You may specify `ALL` when used with the `revoke_sessions` action to apply the action to all customer managed IAM roles in the targeted account.
+- `target_role`: The name of the IAM role to delete (required only for the `detach_policies` and `delete_role` actions). You may specify `ALL` when used with the `revoke_sessions` action to apply the action to all customer managed IAM roles in the targeted account. This does not affect the assumed role, which is skipped in the function's loop.
 - `org_management_account`: The AWS Organization's management account ID (required only for the `apply_scp` action).
 - `region`: The AWS region where the Lambda function is deployed (defaults to us-east-1 if none provided)
 
